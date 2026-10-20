@@ -42,6 +42,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("state", "Viewer state as JSON"),
     ("snap <out.png> [--ui]", "Save exactly what the window shows"),
     ("focus", "Bring the window to the front"),
+    ("open-dialog", "Show the Open file dialog"),
+    ("background <on|off|toggle>", "Keep running in the tray when the window is closed"),
+    ("hide", "Hide the window (to the tray in background mode)"),
     ("quit", "Close the viewer"),
 ];
 
@@ -423,6 +426,25 @@ impl GlintApp {
             }
             "state" => Ok(self.state_json()),
             "focus" => ok(),
+            "open-dialog" => {
+                self.open_dialog();
+                ok()
+            }
+            "background" => {
+                self.settings.background = toggle(a0, self.settings.background)?;
+                if cwd.is_none() {
+                    self.toast(if self.settings.background { "Stays in the tray when closed" } else { "Exits when closed" });
+                }
+                ok()
+            }
+            "hide" => {
+                if self.settings.background {
+                    self.hide_window(ctx);
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+                ok()
+            }
             "quit" | "exit" => {
                 self.quit = true;
                 ok()

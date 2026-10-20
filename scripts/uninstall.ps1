@@ -19,6 +19,10 @@ Get-ChildItem 'HKCU:\Software\Classes\SystemFileAssociations' -ErrorAction Silen
     Remove-Item "$($_.PSPath)\shell\Glint.Compare" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Glint' -ErrorAction SilentlyContinue
+$policy = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -ErrorAction SilentlyContinue).DefaultAssociationsConfiguration
+if ($policy -like '*Glint*') { & (Join-Path $PSScriptRoot 'set-default.ps1') -Remove }
+
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 [Environment]::SetEnvironmentVariable('Path', (($userPath -split ';') | Where-Object { $_ -and $_ -ne $dest }) -join ';', 'User')
 Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue

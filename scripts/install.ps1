@@ -3,10 +3,11 @@
   Build Glint, install it to %LOCALAPPDATA%\Programs\Glint, put `glint` on PATH and
   register it for image files (per-user, no admin needed).
 
-.PARAMETER NoBuild     Use the existing target\release binaries.
-.PARAMETER NoSettings  Don't open the Default Apps settings page afterwards.
+.PARAMETER NoBuild       Use the existing target\release binaries.
+.PARAMETER NoSettings    Don't run set-default.ps1 (the default-app policy, one UAC prompt).
+.PARAMETER NoBackground  Don't start Glint at login / keep it in the tray.
 #>
-param([switch]$NoBuild, [switch]$NoSettings)
+param([switch]$NoBuild, [switch]$NoSettings, [switch]$NoBackground)
 $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path $PSScriptRoot -Parent
@@ -92,8 +93,18 @@ Add-Type -Namespace Glint -Name Shell -MemberDefinition @'
 [Glint.Shell]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
 
 Write-Host "Registered Glint for $($exts.Count) image types." -ForegroundColor Green
-if (-not $NoSettings) {
-    Write-Host "Windows requires you to confirm the default app yourself:" -ForegroundColor Yellow
-    Write-Host "  In the Settings page that opens, click 'Set default' next to Glint."
-    Start-Process 'ms-settings:defaultapps?registeredAppUser=Glint'
+
+# Background mode: start hidden in the tray at login so opening images is instant.
+$run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+if ($NoBackground) {
+    Remove-ItemProperty $run -Name 'Glint' -ErrorAction SilentlyContinue
+} else {
+    Set-ItemProperty $run -Name 'Glint' -Value "`"$gui`" --background"
+    Start-Process $gui -ArgumentList '--background'
+    Write-Host 'Glint is running in the tray and will start at login.'
+}
+
+$policy = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -ErrorAction SilentlyContinue).DefaultAssociationsConfiguration
+if (-not $NoSettings -and -not $policy) {
+    & (Join-Path $PSScriptRoot 'set-default.ps1')
 }

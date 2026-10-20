@@ -75,6 +75,11 @@ impl Loader {
         }
     }
 
+    /// Drop every cached image (used when hiding to the tray).
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+
     pub fn invalidate(&mut self, path: &Path) {
         self.cache.remove(path);
     }

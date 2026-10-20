@@ -137,5 +137,5 @@ fn magick_formats() {
     assert_eq!((d.width(), d.height()), (640, 400));
     // Multi-page TIFF: both pages available.
     let d = ok("pages.tiff");
-    assert!(!d.frames.is_empty());
+    assert_eq!(d.frames.len(), 2, "both TIFF pages");
 }

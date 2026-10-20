@@ -5,6 +5,7 @@ mod draw;
 mod hud;
 mod layer;
 mod sheet_panel;
+mod tray;
 mod view;
 
 use std::path::{Path, PathBuf};
@@ -75,11 +76,13 @@ pub struct Settings {
     pub grid: bool,
     pub hud: HudMode,
     pub info: bool,
+    /// Closing the window hides it (tray icon stays) so the next open is instant.
+    pub background: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { bg: Bg::DarkChecker, smooth: false, grid: true, hud: HudMode::Auto, info: false }
+        Self { bg: Bg::DarkChecker, smooth: false, grid: true, hud: HudMode::Auto, info: false, background: true }
     }
 }
 
@@ -208,6 +211,15 @@ pub struct GlintApp {
     startup: Vec<Vec<String>>,
     quit: bool,
     view_animating: bool,
+    hidden: bool,
+    /// Frames left to paint before actually hiding (so freed textures get released,
+    /// and so eframe's show-after-first-frame doesn't override a background start).
+    hide_in: u8,
+    tray: Option<tray::Tray>,
+    dialog_tx: mpsc::Sender<Vec<PathBuf>>,
+    dialog_rx: Receiver<Vec<PathBuf>>,
+    /// SVG re-render in flight: result channel.
+    svg_job: Option<Receiver<Result<image::RgbaImage, String>>>,
     snap_armed: bool,
     /// Set while a clean capture is in flight; eframe grabs the frame *after* the request.
     snap_hide: Arc<std::sync::atomic::AtomicBool>,
@@ -217,7 +229,8 @@ pub struct GlintApp {
 const SETTINGS_KEY: &str = "glint-settings";
 
 /// Start the GUI. `startup` holds commands (argv form) to run on the first frame.
-pub fn run(server: ipc::Server, startup: Vec<Vec<String>>) -> eframe::Result {
+/// `background`: start with the window hidden (login autostart); it appears on the first open.
+pub fn run(server: ipc::Server, startup: Vec<Vec<String>>, background: bool) -> eframe::Result {
     let ctx_cell: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
     let ipc_rx = server.spawn(ctx_cell.clone());
 
@@ -232,7 +245,8 @@ pub fn run(server: ipc::Server, startup: Vec<Vec<String>>) -> eframe::Result {
         .with_app_id("glint")
         .with_inner_size([1100.0, 760.0])
         .with_min_inner_size([360.0, 240.0])
-        .with_drag_and_drop(true);
+        .with_drag_and_drop(true)
+        .with_visible(!background);
     if let Some(icon) = icon {
         viewport = viewport.with_icon(Arc::new(icon));
     }
@@ -249,7 +263,9 @@ pub fn run(server: ipc::Server, startup: Vec<Vec<String>>) -> eframe::Result {
             crate::win::style_titlebar(cc, [CANVAS.r(), CANVAS.g(), CANVAS.b()]);
             setup_style(&cc.egui_ctx);
             let settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
-            Ok(Box::new(GlintApp::new(cc.egui_ctx.clone(), ipc_rx, settings, startup)))
+            let mut app = GlintApp::new(cc.egui_ctx.clone(), ipc_rx, settings, startup, background);
+            app.tray = tray::create(&cc.egui_ctx);
+            Ok(Box::new(app))
         }),
     )
 }
@@ -309,8 +325,15 @@ fn setup_style(ctx: &egui::Context) {
 }
 
 impl GlintApp {
-    fn new(ctx: egui::Context, ipc_rx: Receiver<Incoming>, settings: Settings, startup: Vec<Vec<String>>) -> Self {
+    fn new(
+        ctx: egui::Context,
+        ipc_rx: Receiver<Incoming>,
+        settings: Settings,
+        startup: Vec<Vec<String>>,
+        hidden: bool,
+    ) -> Self {
         let (watch_tx, watch_rx) = mpsc::channel();
+        let (dialog_tx, dialog_rx) = mpsc::channel();
         Self {
             ctx: ctx.clone(),
             ipc_rx,
@@ -347,6 +370,12 @@ impl GlintApp {
             startup,
             quit: false,
             view_animating: false,
+            hidden,
+            hide_in: if hidden { 2 } else { 0 },
+            tray: None,
+            dialog_tx,
+            dialog_rx,
+            svg_job: None,
             snap_armed: false,
             snap_hide: Default::default(),
         }
@@ -674,8 +703,8 @@ impl GlintApp {
             if argv.first().map(String::as_str) == Some("snap") {
                 match commands::parse_snap(&argv[1..], cwd.as_deref()) {
                     Ok((path, clean)) => {
-                        if ctx.input(|i| i.viewport().minimized) == Some(true) {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        if self.hidden || ctx.input(|i| i.viewport().minimized) == Some(true) {
+                            self.show_window(ctx);
                         }
                         self.snaps.push(SnapReq { since: self.last_time, path, clean, reply: inc.reply });
                         ctx.request_repaint();
@@ -686,15 +715,15 @@ impl GlintApp {
                 }
                 continue;
             }
-            let raise = matches!(argv.first().map(String::as_str), Some("open" | "compare" | "compare-add" | "focus"));
+            let raise = matches!(
+                argv.first().map(String::as_str),
+                Some("open" | "compare" | "compare-add" | "focus" | "open-dialog")
+            );
             let res = self.exec(ctx, &argv, cwd.as_deref());
             // Scripted changes land instantly so a following `snap` sees the final view.
             self.view.snap_next = true;
             if raise && res.is_ok() {
-                if ctx.input(|i| i.viewport().minimized) == Some(true) {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                self.show_window(ctx);
             }
             let _ = inc.reply.send(res.into());
         }
@@ -722,6 +751,12 @@ impl GlintApp {
             }
             if i.consume_key(ctrl | shift, Key::C) {
                 cmds.push("copy path");
+            }
+            if i.consume_key(ctrl, Key::O) {
+                cmds.push("open-dialog");
+            }
+            if i.consume_key(ctrl, Key::W) {
+                cmds.push("hide");
             }
             if i.consume_key(ctrl, Key::R) || i.consume_key(Modifiers::NONE, Key::F5) {
                 cmds.push("reload");
@@ -878,6 +913,122 @@ impl GlintApp {
         }
     }
 
+    pub fn show_window(&mut self, ctx: &egui::Context) {
+        self.hide_in = 0;
+        if self.hidden {
+            self.hidden = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+        if ctx.input(|i| i.viewport().minimized) == Some(true) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
+    }
+
+    /// Hide to the tray and release everything image-sized.
+    pub fn hide_window(&mut self, ctx: &egui::Context) {
+        self.hidden = true;
+        // Paint one empty frame first so the GPU textures of the dropped images are freed.
+        self.hide_in = 2;
+        ctx.request_repaint();
+        if ctx.input(|i| i.viewport().fullscreen) == Some(true) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        }
+        self.doc = None;
+        self.compare = None;
+        self.pending_compare = None;
+        self.error = None;
+        self.current = None;
+        self.files.clear();
+        self.sheet = None;
+        self.sheet_ui.open = false;
+        self.palette.open = false;
+        self.help = false;
+        self.confirm_delete = None;
+        self.svg_job = None;
+        self.loader.clear();
+        self._watcher = None;
+        self.watched_dir = None;
+    }
+
+    fn handle_tray(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.tray.as_ref().map(|t| &t.rx) else { return };
+        let actions: Vec<tray::TrayAction> = rx.try_iter().collect();
+        for a in actions {
+            match a {
+                tray::TrayAction::Show => self.show_window(ctx),
+                tray::TrayAction::Open => self.open_dialog(),
+                tray::TrayAction::Quit => self.quit = true,
+            }
+        }
+    }
+
+    /// Native file picker on a worker thread so the UI keeps painting.
+    pub fn open_dialog(&mut self) {
+        let tx = self.dialog_tx.clone();
+        let ctx = self.ctx.clone();
+        let dir = self.current.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
+        std::thread::spawn(move || {
+            let mut d = rfd::FileDialog::new()
+                .set_title("Open image")
+                .add_filter("Images", crate::decode::EXTENSIONS)
+                .add_filter("All files", &["*"]);
+            if let Some(dir) = dir {
+                d = d.set_directory(dir);
+            }
+            if let Some(paths) = d.pick_files() {
+                let _ = tx.send(paths);
+                ctx.request_repaint();
+            }
+        });
+    }
+
+    /// Re-rasterize an SVG at higher resolution once the user zooms past its raster.
+    fn update_svg_resolution(&mut self) {
+        if let Some(rx) = &self.svg_job {
+            match rx.try_recv() {
+                Ok(Ok(img)) => {
+                    self.svg_job = None;
+                    let Some(doc) = &mut self.doc else { return };
+                    let factor = img.width() as f32 / doc.dec.width().max(1) as f32;
+                    let mut dec = (*doc.dec).clone();
+                    dec.frames[0].image = Arc::new(img);
+                    doc.layer = Layer::new(vec![dec.frames[0].image.clone()]);
+                    doc.dec = Arc::new(dec);
+                    doc.stats_started = false;
+                    *doc.stats.lock().unwrap() = None;
+                    // Same picture, more pixels: rescale the view so nothing visibly moves.
+                    self.view.rescale(factor);
+                }
+                Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => self.svg_job = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            return;
+        }
+        if self.view_animating || self.view.zoom <= 1.05 {
+            return;
+        }
+        let Some(doc) = &self.doc else { return };
+        let Some((src, _)) = doc.dec.vector.clone() else { return };
+        let long = doc.dec.width().max(doc.dec.height());
+        let max = crate::decode::svg::MAX_LONG_SIDE as u32;
+        if long >= max {
+            return;
+        }
+        let target = ((long as f32 * self.view.zoom).ceil() as u32).next_power_of_two().min(max);
+        if target <= long {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::decode::svg::render(&src, Some(target)).map(|(_, img)| img));
+            ctx.request_repaint();
+        });
+        self.svg_job = Some(rx);
+    }
+
     pub fn is_busy(&self) -> bool {
         self.pending_compare.is_some()
             || self.current.as_ref().is_some_and(|p| {
@@ -908,8 +1059,19 @@ impl eframe::App for GlintApp {
             }
         }
         self.handle_ipc(ctx);
+        self.handle_tray(ctx);
+        while let Ok(paths) = self.dialog_rx.try_recv() {
+            if !paths.is_empty() {
+                self.open_list(paths);
+                self.show_window(ctx);
+            }
+        }
         if self.quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if ctx.input(|i| i.viewport().close_requested()) && self.settings.background {
+            // Background mode: closing just hides; the GPU context stays warm for the next open.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hide_window(ctx);
         }
     }
 
@@ -929,6 +1091,7 @@ impl eframe::App for GlintApp {
         let clean = self.snaps.iter().any(|s| s.clean) || self.snap_hide.load(std::sync::atomic::Ordering::SeqCst);
         self.handle_keys(&ctx);
         self.handle_canvas_input(&ctx, &resp, rect);
+        self.update_svg_resolution();
         self.draw_canvas(ui, rect);
         // The error card is content (what the user sees instead of an image), so snaps keep it.
         self.draw_error(&ctx, rect);
@@ -940,6 +1103,14 @@ impl eframe::App for GlintApp {
         self.modals(&ctx);
         self.update_title(&ctx);
         self.finish_snaps(&ctx);
+        if self.hide_in > 0 {
+            self.hide_in -= 1;
+            if self.hide_in == 0 && self.hidden {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            } else {
+                ctx.request_repaint();
+            }
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

@@ -38,6 +38,7 @@ pub fn human_size(n: u64) -> String {
 
 /// Palette entries: (label, command line).
 const PALETTE: &[(&str, &str)] = &[
+    ("Open image…", "open-dialog"),
     ("Fit to window", "zoom fit"),
     ("Actual size (100%)", "zoom 100"),
     ("Zoom 200%", "zoom 200"),
@@ -80,6 +81,9 @@ const PALETTE: &[(&str, &str)] = &[
     ("Exposure −1 EV", "exposure -1"),
     ("Move to Recycle Bin…", "delete"),
     ("Keyboard shortcuts", "help"),
+    ("Toggle: stay in tray when closed", "background toggle"),
+    ("Hide window", "hide"),
+    ("Quit Glint", "quit"),
 ];
 
 const SHORTCUTS: &[(&str, &str)] = &[
@@ -104,6 +108,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+R / F5", "Reload"),
     ("Delete", "Move to Recycle Bin"),
     ("Ctrl+P", "Command palette"),
+    ("Ctrl+O", "Open image…"),
+    ("Ctrl+W", "Close to tray"),
     ("Esc", "Leave compare / sheet / fullscreen"),
 ];
 
@@ -192,7 +198,10 @@ impl GlintApp {
                 let d = &doc.dec;
                 ui.label(RichText::new(file_name(&d.path)).strong());
                 dot(ui);
-                ui.label(format!("{} × {}", d.width(), d.height()));
+                match d.vector {
+                    Some((_, [vw, vh])) => ui.label(format!("{} × {} (vector)", vw.round(), vh.round())),
+                    None => ui.label(format!("{} × {}", d.width(), d.height())),
+                };
                 dot(ui);
                 ui.label(RichText::new(&d.format).color(TEXT_DIM));
                 if self.files.len() > 1 {
@@ -433,7 +442,8 @@ impl GlintApp {
         resp.context_menu(|ui| {
             ui.set_min_width(190.0);
             let has_px = self.hover_rgba().is_some();
-            let mut items: Vec<(&str, &'static str)> = vec![("Copy image", "copy image"), ("Copy path", "copy path")];
+            let mut items: Vec<(&str, &'static str)> =
+                vec![("Open…", "open-dialog"), ("Copy image", "copy image"), ("Copy path", "copy path")];
             if has_px {
                 items.push(("Copy color under cursor", "copy hex"));
             }

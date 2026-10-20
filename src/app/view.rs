@@ -138,6 +138,19 @@ impl View {
         true
     }
 
+    /// The content was re-rasterized `factor`x larger; keep the same on-screen view.
+    pub fn rescale(&mut self, factor: f32) {
+        if !(factor > 0.0) {
+            return;
+        }
+        self.zoom /= factor;
+        self.target /= factor;
+        self.center *= factor;
+        if let Some((_, img)) = &mut self.anchor {
+            *img *= factor;
+        }
+    }
+
     pub fn pan_by(&mut self, screen_delta: Vec2) {
         self.fit = false;
         self.anchor = None;

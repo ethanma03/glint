@@ -28,6 +28,7 @@ pub struct Tag {
     pub to: u32,
 }
 
+#[derive(Clone)]
 pub struct Decoded {
     pub path: PathBuf,
     /// Human-readable container format, e.g. "PNG", "Aseprite", "HEIC".
@@ -42,6 +43,8 @@ pub struct Decoded {
     pub hdr: Option<Arc<image::Rgba32FImage>>,
     pub file_size: u64,
     pub notes: Vec<String>,
+    /// SVG source and its intrinsic size, so the viewer can re-rasterize when zooming in.
+    pub vector: Option<(Arc<Vec<u8>>, [f32; 2])>,
 }
 
 impl Decoded {
@@ -56,6 +59,7 @@ impl Decoded {
             hdr: None,
             file_size: 0,
             notes: Vec::new(),
+            vector: None,
         }
     }
 
@@ -227,6 +231,17 @@ pub fn decode(path: &Path) -> Result<Decoded, String> {
         (Err(e), _) => return Err(e),
     };
 
+    // The built-in TIFF decoder only reads the first page; hand multi-page files to magick.
+    if kind == Kind::Native(ImageFormat::Tiff) && dec.decoder == "native" && magick::available() {
+        let pages = tiff_page_count(&data);
+        if pages > 1 {
+            if let Ok(mut d) = magick::decode(path, Some("TIFF")) {
+                d.notes.push(format!("{pages} pages."));
+                dec = d;
+            }
+        }
+    }
+
     let ext = ext_lower(path);
     if let Kind::Native(fmt) = kind {
         if !ext.is_empty() && !fmt.extensions_str().contains(&ext.as_str()) && !["apng", "cur", "jfif", "jpe", "dib"].contains(&ext.as_str())
@@ -257,6 +272,29 @@ fn decode_kind(data: &[u8], path: &Path, kind: Kind) -> Result<Decoded, String> 
             magick::decode(path, Some(label))
         }
     }
+}
+
+/// Count pages (IFDs) in a classic TIFF without decoding pixels.
+pub fn tiff_page_count(data: &[u8]) -> u32 {
+    let le = match data.get(..4) {
+        Some(b"II* ") => true,
+        Some(b"MM *") => false,
+        _ => return 0,
+    };
+    let u16_at = |o: usize| data.get(o..o + 2).map(|b| if le { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) });
+    let u32_at = |o: usize| {
+        data.get(o..o + 4)
+            .map(|b| if le { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) } else { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) })
+    };
+    let mut pages = 0;
+    let mut off = u32_at(4).unwrap_or(0) as usize;
+    let mut seen = std::collections::HashSet::new();
+    while off != 0 && pages < 10_000 && seen.insert(off) {
+        let Some(n) = u16_at(off) else { break };
+        pages += 1;
+        off = u32_at(off + 2 + n as usize * 12).unwrap_or(0) as usize;
+    }
+    pages
 }
 
 fn io_msg(e: &std::io::Error) -> String {

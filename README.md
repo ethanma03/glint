@@ -10,6 +10,7 @@ A fast, minimal image viewer for Windows, made for game sprites and screenshots.
   - a pixel inspector (coords + hex);
   - backgrounds: checker, black, white or magenta.
 - **Compare**: diff, side-by-side, onion skin and swipe modes, with AE, RMSE and PSNR readouts. In Explorer, select two images and choose "Compare with Glint".
+- **Instant**: runs in the tray after you close it, so double-clicking an image opens it in under 100 ms. `Ctrl+O` opens a file picker, and the tray menu has Open and Quit.
 - **Scriptable**: `glint ctl …` controls the open window, `glint snap` captures it, and `glint edit` / `glint magick` run ImageMagick with preview and undo.
 
 ## Install
@@ -17,7 +18,7 @@ A fast, minimal image viewer for Windows, made for game sprites and screenshots.
 pwsh scripts\install.ps1     # build, install to %LOCALAPPDATA%\Programs\Glint, register file types
 pwsh scripts\update.ps1      # later: pull, rebuild, reinstall
 ```
-Then in the Settings page that opens, click **Set default** next to Glint.
+`install.ps1` also runs `scripts\set-default.ps1`. That script makes Glint the default for every image type through Windows' default-associations policy: you approve one UAC prompt, and the change applies at your next sign-in. Undo it with `set-default.ps1 -Remove`. Pass `-NoBackground` to install if you don't want the tray/autostart.
 
 ## Keys
 Press **F1** in the viewer for the full list. The basics:

@@ -254,7 +254,7 @@ impl GlintApp {
         painter.text(
             c + egui::vec2(0.0, 18.0),
             Align2::CENTER_CENTER,
-            "Drop an image here, or run  glint <file>",
+            "Drop an image here, press Ctrl+O, or run  glint <file>",
             FontId::proportional(14.0),
             TEXT_DIM,
         );
