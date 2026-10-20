@@ -6,7 +6,7 @@ A fast, minimal image viewer for Windows, made for game sprites and screenshots.
 - **Opens almost anything**: PNG/APNG, JPEG, GIF, WebP, BMP, ICO, TGA, DDS, QOI, TIFF, EXR/HDR, PNM, SVG and Aseprite are built in. AVIF, HEIC, JPEG XL, PSD, XCF and camera RAW go through ImageMagick. Formats are detected by content, so a JPEG named `.png` still opens.
 - **Sprite tools**:
   - animation playback with a frame scrubber and Aseprite tags;
-  - a sprite-sheet grid overlay with cell indices and a live cell-animation preview;
+  - a sprite-sheet panel (`Shift+G`): any cell size, columns × rows, offset/gap, auto-detect from sprite gaps, cell indices and a live cell-animation preview;
   - a pixel inspector (coords + hex);
   - backgrounds: checker, black, white or magenta.
 - **Compare**: diff, side-by-side, onion skin and swipe modes, with AE, RMSE and PSNR readouts. In Explorer, select two images and choose "Compare with Glint".

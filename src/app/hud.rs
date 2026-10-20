@@ -8,7 +8,7 @@ use super::commands::{COMMANDS, split_args};
 use super::{ACCENT, CmpMode, GlintApp, HudMode, TEXT_DIM};
 use crate::analysis::hex;
 
-fn card() -> Frame {
+pub(super) fn card() -> Frame {
     Frame::new()
         .fill(Color32::from_rgba_unmultiplied(22, 22, 26, 236))
         .stroke(Stroke::new(1.0, Color32::from_white_alpha(16)))
@@ -50,6 +50,8 @@ const PALETTE: &[(&str, &str)] = &[
     ("Background: black", "bg black"),
     ("Background: white", "bg white"),
     ("Background: magenta", "bg magenta"),
+    ("Sprite sheet panel…", "sheet panel"),
+    ("Sprite sheet: detect grid", "sheet auto"),
     ("Sprite sheet 8×8", "sheet 8x8"),
     ("Sprite sheet 16×16", "sheet 16x16"),
     ("Sprite sheet 32×32", "sheet 32x32"),
@@ -89,7 +91,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Drag / double-click", "Pan / toggle fit"),
     ("Space", "Play / pause animation"),
     (", .", "Previous / next frame"),
-    ("G / Shift+G", "Pixel grid / sheet overlay off"),
+    ("G / Shift+G", "Pixel grid / sprite-sheet panel"),
     ("B", "Cycle background"),
     ("S", "Smooth vs crisp scaling"),
     ("I / H", "Details panel / info bar"),
@@ -134,6 +136,7 @@ impl GlintApp {
             self.info_panel(ctx);
         }
         self.sheet_preview(ctx, rect);
+        self.sheet_panel(ctx);
         if let Some((msg, t)) = self.toast.clone() {
             let a = (1.0 - ((now - t - 1.4) / 0.4).clamp(0.0, 1.0)) as f32;
             egui::Area::new(egui::Id::unique("toast"))
@@ -438,29 +441,33 @@ impl GlintApp {
             menu_items(ui, &items, &mut cmd);
             ui.separator();
             menu_items(ui, &[("Fit to window", "zoom fit"), ("Actual size", "zoom 100"), ("Toggle pixel grid", "grid toggle")], &mut cmd);
-            ui.menu_button("Background", |ui| {
-                for (l, c) in [
-                    ("Dark checker", "bg checker"),
-                    ("Light checker", "bg light-checker"),
-                    ("Black", "bg black"),
-                    ("Gray", "bg gray"),
-                    ("White", "bg white"),
-                    ("Magenta", "bg magenta"),
+            // Inline swatches instead of a submenu: no hover gap to cross.
+            ui.add_space(2.0);
+            ui.label(RichText::new("Background").small().color(TEXT_DIM));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let cur = self.settings.bg;
+                let g = Color32::from_gray;
+                for (bg, fill, tip, c) in [
+                    (super::Bg::DarkChecker, [g(0x2b), g(0x22)], "Dark checker", "bg checker"),
+                    (super::Bg::LightChecker, [g(0xee), g(0xbe)], "Light checker", "bg light-checker"),
+                    (super::Bg::Black, [Color32::BLACK; 2], "Black", "bg black"),
+                    (super::Bg::Gray, [g(0x80); 2], "Gray", "bg gray"),
+                    (super::Bg::White, [Color32::WHITE; 2], "White", "bg white"),
+                    (super::Bg::Magenta, [Color32::from_rgb(255, 0, 255); 2], "Magenta", "bg magenta"),
                 ] {
-                    if ui.button(l).clicked() {
+                    if super::sheet_panel::bg_swatch(ui, fill, cur == bg, tip) {
                         cmd = Some(c);
                         ui.close();
                     }
                 }
             });
-            ui.menu_button("Sprite sheet", |ui| {
-                for (l, c) in [("8 × 8", "sheet 8x8"), ("16 × 16", "sheet 16x16"), ("32 × 32", "sheet 32x32"), ("64 × 64", "sheet 64x64"), ("Off", "sheet off")] {
-                    if ui.button(l).clicked() {
-                        cmd = Some(c);
-                        ui.close();
-                    }
-                }
-            });
+            ui.add_space(2.0);
+            let mut sheet_items: Vec<(&str, &'static str)> = vec![("Sprite sheet…", "sheet panel")];
+            if self.sheet.is_some() {
+                sheet_items.push(("Hide sprite sheet", "sheet off"));
+            }
+            menu_items(ui, &sheet_items, &mut cmd);
             menu_items(ui, &[("Details", "info toggle")], &mut cmd);
             ui.separator();
             menu_items(ui, &[("Command palette…", "palette"), ("Move to Recycle Bin…", "delete")], &mut cmd);

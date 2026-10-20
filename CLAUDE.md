@@ -31,12 +31,13 @@ glint state                           # file, zoom_percent, visible_rect, frame,
 glint snap -o out.png [--ui]          # PNG of exactly what the window shows -> Read it to "see" the viewer
 glint ctl zoom 800 | zoom fit | center 16 16 | grid on | bg magenta | smooth off
 glint ctl frame 3 | play off | tag walk | speed 0.5
-glint ctl sheet 32x32 offset 0,0 gap 0,0 play 0-7 fps 12 | sheet off
+glint ctl sheet 32x32 offset 0,0 gap 0,0 play 0-7 fps 12   # any cell size, e.g. 5x7
+glint ctl sheet cells 5x5 | sheet auto | sheet panel | sheet off   # by columns x rows / detected from gaps
 glint ctl compare a.png b.png diff|side|onion|swipe | mode onion | split 0.3 | compare off
 glint ctl help                        # every viewer command
 glint info sprite.png --json          # dims, frames/delays, Aseprite tags, unique colors, alpha bbox
 glint compare a.png b.png --json --no-show [--diff-out d.png]   # AE / RMSE / PSNR / diff bbox
-glint sheet atlas.png --grid 16x16 --json [--export outdir]     # per-cell rects, empty cells, bboxes
+glint sheet atlas.png --grid 16x16 | --cells 8x4 | --detect  --json [--export outdir]   # per-cell rects, empty cells, bboxes
 glint edit <op> [args] [-i file] [-o out | --in-place]          # crop x,y,w,h | rotate 90 | flip h | scale 4x | trim | pad WxH | key #ff00ff 5% | flatten | colors 16 | grayscale | strip | convert webp
 glint magick [-i file] [-o out | --in-place] -- <magick args>   # arbitrary magick pipeline
 glint undo                            # restore the file before the last --in-place edit

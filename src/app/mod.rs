@@ -4,6 +4,7 @@ mod commands;
 mod draw;
 mod hud;
 mod layer;
+mod sheet_panel;
 mod view;
 
 use std::path::{Path, PathBuf};
@@ -185,6 +186,7 @@ pub struct GlintApp {
     pending_compare: Option<(PathBuf, PathBuf, CmpMode)>,
     compare_inbox: Vec<(PathBuf, f64)>,
     sheet: Option<Sheet>,
+    sheet_ui: sheet_panel::SheetUi,
 
     palette: Palette,
     help: bool,
@@ -326,6 +328,7 @@ impl GlintApp {
             pending_compare: None,
             compare_inbox: Vec::new(),
             sheet: None,
+            sheet_ui: Default::default(),
             palette: Palette::default(),
             help: false,
             confirm_delete: None,
@@ -432,8 +435,13 @@ impl GlintApp {
                 if !same_dims {
                     self.view.fit = true;
                     self.view.snap_next = true;
-                    // A sheet grid only makes sense for images of the same layout.
-                    self.sheet = None;
+                    // A pixel grid only fits images of the same layout; with the panel open,
+                    // re-apply its settings (a columns×rows grid adapts to the new size).
+                    if self.sheet_ui.open {
+                        self.apply_sheet_ui();
+                    } else {
+                        self.sheet = None;
+                    }
                 }
             }
             Err(e) => {
@@ -725,7 +733,7 @@ impl GlintApp {
                 cmds.push("exposure +0.5");
             }
             if i.consume_key(shift, Key::G) {
-                cmds.push("sheet off");
+                cmds.push("sheet panel");
             }
             for (key, cmd) in [
                 (Key::G, "grid toggle"),

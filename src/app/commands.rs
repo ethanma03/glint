@@ -16,7 +16,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("zoom <fit|in|out|N%|Nx>", "Set zoom; 100 = one screen pixel per image pixel"),
     ("center <x> <y>", "Center the view on an image pixel"),
     ("grid <on|off|toggle>", "Pixel grid (visible from 600%)"),
-    ("sheet <WxH> [offset X,Y] [gap X,Y] [play A-B] [fps N]", "Sprite-sheet overlay and cell animation preview"),
+    ("sheet <WxH> [offset X,Y] [gap X,Y] [play A-B] [fps N]", "Sprite-sheet overlay by cell size in pixels (any size, e.g. 5x5 or 24x40)"),
+    ("sheet cells <COLSxROWS> [offset X,Y] [gap X,Y]", "Sprite-sheet overlay by number of columns x rows"),
+    ("sheet auto", "Detect the grid from the gaps between sprites"),
+    ("sheet panel", "Open the sprite-sheet panel"),
     ("sheet off", "Hide the sprite-sheet overlay"),
     ("bg <checker|light-checker|black|gray|white|magenta|#rrggbb|next>", "Background behind transparency"),
     ("smooth <on|off|toggle>", "Smooth (bilinear) magnification instead of crisp pixels"),
@@ -429,25 +432,48 @@ impl GlintApp {
     }
 
     fn cmd_sheet(&mut self, args: &[&str]) -> Result<Value, String> {
-        let usage = "usage: sheet <WxH> [offset X,Y] [gap X,Y] [play A-B] [fps N] | sheet off";
-        match args.first().copied() {
-            None => return Err(usage.into()),
-            Some("off") => {
+        let usage = "usage: sheet <WxH> | sheet cells <COLSxROWS> | sheet auto  [offset X,Y] [gap X,Y] [play A-B] [fps N] | sheet off | sheet panel";
+        let (w, h) = self.doc.as_ref().map(|d| (d.dec.width(), d.dec.height())).ok_or("no image open")?;
+        let mut rest = args;
+        // How the cell size is given: pixels, a column×row count, or detected.
+        enum Spec {
+            Cell([u32; 2]),
+            Counts([u32; 2]),
+            Auto,
+        }
+        let spec = match rest {
+            [] => return Err(usage.into()),
+            ["off", ..] => {
                 self.sheet = None;
+                self.sheet_ui.open = false;
                 return Ok(json!(true));
             }
-            _ => {}
-        }
-        let cell = parse_size(args[0]).ok_or(usage)?;
-        let mut grid = SheetGrid { cell, offset: [0, 0], gap: [0, 0] };
+            ["panel" | "ui", ..] => {
+                self.open_sheet_panel();
+                return Ok(json!(true));
+            }
+            ["auto" | "detect", r @ ..] => {
+                rest = r;
+                Spec::Auto
+            }
+            ["cells" | "grid" | "counts", n, r @ ..] => {
+                rest = r;
+                Spec::Counts(parse_size(n).ok_or("bad cell count, e.g. cells 5x5 (columns x rows)")?)
+            }
+            [size, r @ ..] => {
+                rest = r;
+                Spec::Cell(parse_size(size).ok_or(usage)?)
+            }
+        };
+        let (mut offset, mut gap) = ([0, 0], [0, 0]);
         let mut play = None;
         let mut fps = 10.0;
-        let mut it = args[1..].iter();
+        let mut it = rest.iter();
         while let Some(k) = it.next() {
             let v = it.next().ok_or(usage)?;
             match k.trim_start_matches("--") {
-                "offset" => grid.offset = parse_pair(v).ok_or("bad offset")?,
-                "gap" | "spacing" => grid.gap = parse_pair(v).ok_or("bad gap")?,
+                "offset" => offset = parse_pair(v).ok_or("bad offset")?,
+                "gap" | "spacing" => gap = parse_pair(v).ok_or("bad gap")?,
                 "play" => {
                     let (a, b) = v.split_once('-').unwrap_or((v, v));
                     play = Some([a.parse().map_err(|_| "bad play range")?, b.parse().map_err(|_| "bad play range")?]);
@@ -456,11 +482,32 @@ impl GlintApp {
                 _ => return Err(usage.into()),
             }
         }
-        self.anim.sheet_cell = play.map_or(0, |p: [u32; 2]| p[0]);
+        let mut leftover = [0, 0];
+        let grid = match spec {
+            Spec::Cell(cell) => SheetGrid { cell, offset, gap },
+            Spec::Counts(n) => {
+                let (g, rest) = SheetGrid::from_counts(w, h, n, offset, gap).ok_or("those counts don't fit the image")?;
+                leftover = rest;
+                g
+            }
+            Spec::Auto => {
+                let img = self.doc.as_ref().unwrap().layer.frame(0).clone();
+                crate::analysis::detect_grid(&img).ok_or("couldn't detect a regular grid (sprites may touch); set the size manually")?
+            }
+        };
+        self.set_sheet(grid, play, fps);
+        let (cols, rows) = (grid.columns(w), grid.rows(h));
+        Ok(json!({
+            "cell": grid.cell, "offset": grid.offset, "gap": grid.gap,
+            "columns": cols, "rows": rows, "cells": cols * rows, "leftover_px": leftover,
+        }))
+    }
+
+    pub fn set_sheet(&mut self, grid: SheetGrid, play: Option<[u32; 2]>, fps: f32) {
+        self.anim.sheet_cell = play.map_or(0, |p| p[0]);
         self.anim.sheet_accum = 0.0;
         self.sheet = Some(Sheet { grid, play, fps });
-        let (cols, rows) = self.doc.as_ref().map_or((0, 0), |d| (grid.columns(d.dec.width()), grid.rows(d.dec.height())));
-        Ok(json!({ "columns": cols, "rows": rows, "cells": cols * rows }))
+        self.sheet_ui.sync(self.sheet.as_ref().unwrap());
     }
 
     fn cmd_copy(&mut self, what: &str) -> Result<Value, String> {

@@ -176,6 +176,118 @@ impl SheetGrid {
     }
 }
 
+impl SheetGrid {
+    /// A grid with `counts` = [columns, rows] cells spread over a `w`×`h` image.
+    /// Returns the grid and the pixels left over on [right, bottom] when it doesn't divide evenly.
+    pub fn from_counts(w: u32, h: u32, counts: [u32; 2], offset: [u32; 2], gap: [u32; 2]) -> Option<(Self, [u32; 2])> {
+        let axis = |len: u32, n: u32, off: u32, gap: u32| {
+            let n = n.max(1);
+            let avail = len.checked_sub(off + gap * (n - 1))?;
+            let cell = avail / n;
+            (cell > 0).then_some((cell, avail - cell * n))
+        };
+        let (cw, rx) = axis(w, counts[0], offset[0], gap[0])?;
+        let (ch, ry) = axis(h, counts[1], offset[1], gap[1])?;
+        Some((Self { cell: [cw, ch], offset, gap }, [rx, ry]))
+    }
+}
+
+/// Guess a sprite sheet's grid from the empty gutters between sprites.
+///
+/// "Empty" means fully transparent, or — for opaque sheets — the color of the
+/// top-left pixel (magenta/solid backgrounds). Works per axis: find runs of
+/// content, then pick the layout with the most cells where no sprite crosses a
+/// cell boundary and every cell row/column has content. Returns None when no
+/// regular grid fits (e.g. packed sheets whose sprites touch).
+pub fn detect_grid(img: &RgbaImage) -> Option<SheetGrid> {
+    let (w, h) = img.dimensions();
+    if w < 2 || h < 2 {
+        return None;
+    }
+    let has_alpha = img.pixels().any(|p| p.0[3] < 255);
+    let bg = img.get_pixel(0, 0).0;
+    let empty = |p: &Rgba<u8>| if has_alpha { p.0[3] == 0 } else { p.0 == bg };
+    let mut col_has = vec![false; w as usize];
+    let mut row_has = vec![false; h as usize];
+    for (x, y, p) in img.enumerate_pixels() {
+        if !empty(p) {
+            col_has[x as usize] = true;
+            row_has[y as usize] = true;
+        }
+    }
+    let (cw, ox, gx, nx) = detect_axis(&col_has)?;
+    let (ch, oy, gy, ny) = detect_axis(&row_has)?;
+    if nx * ny < 2 {
+        return None;
+    }
+    Some(SheetGrid { cell: [cw, ch], offset: [ox, oy], gap: [gx, gy] })
+}
+
+/// Returns (cell, offset, gap, count) for one axis.
+fn detect_axis(content: &[bool]) -> Option<(u32, u32, u32, u32)> {
+    let len = content.len() as u32;
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (i, &c) in content.iter().chain(std::iter::once(&false)).enumerate() {
+        match (c, start) {
+            (true, None) => start = Some(i as u32),
+            (false, Some(s)) => {
+                runs.push((s, i as u32 - 1));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if runs.is_empty() {
+        return None;
+    }
+    if runs.len() == 1 {
+        // A single row/column of sprites: the whole axis is one cell.
+        return Some((len, 0, 0, 1));
+    }
+    // Ranking: more cells first, then sprites best centered in their cells
+    // (several offset/gap combos can contain inset sprites), then the simplest layout.
+    let mut best: Option<((u32, i64, i64), (u32, u32, u32, u32))> = None;
+    for gap in 0..=8u32 {
+        for off in 0..=8u32 {
+            for trail in [0, off] {
+                for n in (2..=runs.len() as u32).rev() {
+                    let Some(avail) = len.checked_sub(off + trail + gap * (n - 1)) else { continue };
+                    if avail % n != 0 || avail / n < 2 {
+                        continue;
+                    }
+                    let cell = avail / n;
+                    let pitch = cell + gap;
+                    let mut used = vec![false; n as usize];
+                    let mut imbalance = 0i64;
+                    let fits = runs.iter().all(|&(a, b)| {
+                        if a < off {
+                            return false;
+                        }
+                        let k = (a - off) / pitch;
+                        let cell_start = off + k * pitch;
+                        let ok = k < n && b < cell_start + cell;
+                        if ok {
+                            used[k as usize] = true;
+                            let (left, right) = ((a - cell_start) as i64, (cell_start + cell - 1 - b) as i64);
+                            imbalance += (left - right).abs();
+                        }
+                        ok
+                    });
+                    if fits && used.iter().all(|&u| u) {
+                        let key = (n, -imbalance, -((off + gap) as i64));
+                        if best.as_ref().is_none_or(|(k, _)| key > *k) {
+                            best = Some((key, (cell, off, gap, n)));
+                        }
+                        break; // largest n for this (gap, off) found
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(_, v)| v)
+}
+
 /// Parse "32x32" / "32" / "16x24".
 pub fn parse_size(s: &str) -> Option<[u32; 2]> {
     let s = s.trim().to_ascii_lowercase();
@@ -221,5 +333,54 @@ mod tests {
         assert_eq!(g.cell_at(17.5, 5.0, 71, 71), None); // in the gap
         assert_eq!(parse_size("32x16"), Some([32, 16]));
         assert_eq!(parse_size("8"), Some([8, 8]));
+    }
+
+    #[test]
+    fn grid_from_counts() {
+        let (g, rest) = SheetGrid::from_counts(25, 25, [5, 5], [0, 0], [0, 0]).unwrap();
+        assert_eq!((g.cell, rest), ([5, 5], [0, 0]));
+        let (g, rest) = SheetGrid::from_counts(100, 50, [3, 2], [1, 1], [2, 2]).unwrap();
+        assert_eq!((g.cell, rest), ([31, 23], [2, 1]));
+    }
+
+    /// Sheet of `cols`×`rows` cells of `cell` px, with a blob inset by `inset` in each cell.
+    fn synth(cols: u32, rows: u32, cell: [u32; 2], off: u32, gap: u32, inset: u32) -> RgbaImage {
+        let w = off * 2 + cols * cell[0] + (cols - 1) * gap;
+        let h = off * 2 + rows * cell[1] + (rows - 1) * gap;
+        let mut img = RgbaImage::new(w, h);
+        for r in 0..rows {
+            for c in 0..cols {
+                let (x0, y0) = (off + c * (cell[0] + gap), off + r * (cell[1] + gap));
+                for y in y0 + inset..y0 + cell[1] - inset {
+                    for x in x0 + inset..x0 + cell[0] - inset {
+                        img.put_pixel(x, y, Rgba([200, 50, 50, 255]));
+                    }
+                }
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn detect_simple_and_odd_sizes() {
+        let g = detect_grid(&synth(4, 2, [32, 32], 0, 0, 3)).unwrap();
+        assert_eq!((g.cell, g.offset, g.gap), ([32, 32], [0, 0], [0, 0]));
+        // Non-power-of-two, non-square cells.
+        let g = detect_grid(&synth(5, 5, [5, 7], 0, 0, 1)).unwrap();
+        assert_eq!(g.cell, [5, 7]);
+        // Exporter-style padding and spacing.
+        let g = detect_grid(&synth(6, 3, [24, 24], 2, 1, 2)).unwrap();
+        assert_eq!((g.cell, g.offset, g.gap), ([24, 24], [2, 2], [1, 1]));
+    }
+
+    #[test]
+    fn detect_opaque_background() {
+        let mut img = synth(3, 2, [16, 16], 0, 0, 2);
+        for p in img.pixels_mut() {
+            if p.0[3] == 0 {
+                p.0 = [255, 0, 255, 255];
+            }
+        }
+        assert_eq!(detect_grid(&img).unwrap().cell, [16, 16]);
     }
 }

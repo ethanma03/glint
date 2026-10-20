@@ -115,9 +115,15 @@ enum Cmd {
     /// Slice or inspect a sprite sheet.
     Sheet {
         file: PathBuf,
-        /// Cell size, e.g. 32x32.
+        /// Cell size in pixels, e.g. 32x32 or 5x7.
+        #[arg(long, conflicts_with_all = ["cells", "detect"])]
+        grid: Option<String>,
+        /// Number of cells as COLUMNSxROWS, e.g. 5x5 (cell size is computed).
+        #[arg(long, conflicts_with = "detect")]
+        cells: Option<String>,
+        /// Detect the grid from the transparent gaps between sprites.
         #[arg(long)]
-        grid: String,
+        detect: bool,
         #[arg(long, default_value = "0,0")]
         offset: String,
         #[arg(long, default_value = "0,0")]
@@ -364,11 +370,26 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let p = ops::undo()?;
             println!("restored {}", p.display());
         }
-        Cmd::Sheet { file, grid, offset, gap, export, keep_empty, show, json } => {
-            let g = SheetGrid {
-                cell: parse_size(&grid).ok_or_else(|| anyhow!("bad --grid '{grid}' (e.g. 32x32)"))?,
-                offset: parse_pair(&offset).ok_or_else(|| anyhow!("bad --offset"))?,
-                gap: parse_pair(&gap).ok_or_else(|| anyhow!("bad --gap"))?,
+        Cmd::Sheet { file, grid, cells, detect, offset, gap, export, keep_empty, show, json } => {
+            let offset = parse_pair(&offset).ok_or_else(|| anyhow!("bad --offset"))?;
+            let gap = parse_pair(&gap).ok_or_else(|| anyhow!("bad --gap"))?;
+            let g = match (grid, cells, detect) {
+                (Some(grid), _, _) => SheetGrid {
+                    cell: parse_size(&grid).ok_or_else(|| anyhow!("bad --grid '{grid}' (e.g. 32x32)"))?,
+                    offset,
+                    gap,
+                },
+                (_, Some(cells), _) => {
+                    let n = parse_size(&cells).ok_or_else(|| anyhow!("bad --cells '{cells}' (e.g. 5x5)"))?;
+                    let (w, h) = glint::decode::decode(&file).map(|d| (d.width(), d.height())).map_err(|e| anyhow!(e))?;
+                    SheetGrid::from_counts(w, h, n, offset, gap).ok_or_else(|| anyhow!("{cells} cells don't fit {w}x{h}"))?.0
+                }
+                (_, _, true) => {
+                    let d = glint::decode::decode(&file).map_err(|e| anyhow!(e))?;
+                    glint::analysis::detect_grid(&d.frames[0].image)
+                        .ok_or_else(|| anyhow!("couldn't detect a regular grid; pass --grid WxH or --cells CxR"))?
+                }
+                _ => bail!("give one of --grid WxH, --cells COLSxROWS, or --detect"),
             };
             let v = ops::sheet(&file, &ops::SheetOpts { grid: g, export: export.map(|e| abs(&e)), keep_empty })?;
             if json {
