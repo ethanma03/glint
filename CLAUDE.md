@@ -21,7 +21,7 @@ Personal image viewer for Windows (Rust, eframe/egui on wgpu). Tuned for game sp
 - Regenerate the fixtures with `python scripts/make_fixtures.py` (needs `magick`).
 - Install: `pwsh scripts/install.ps1`. This builds release, copies to `%LOCALAPPDATA%\Programs\Glint`, adds it to PATH and registers per-user file associations.
 - Update after code changes: `pwsh scripts/update.ps1`. It rebuilds, reinstalls and reopens the last image.
-- Default app: `scripts/set-default.ps1` (one UAC prompt) sets the HKLM DefaultAssociationsConfiguration policy to `%ProgramData%\Glint\default-associations.xml`. Windows applies it at sign-in. `-Remove` undoes it. UserChoice can't be written directly (hash + UCPD driver).
+- Default app: `scripts/set-default.ps1` (one UAC prompt) sets the HKLM DefaultAssociationsConfiguration policy to `%ProgramData%\Glint\default-associations.xml`. Windows applies it at sign-in. It **merges** the entries of whatever file the policy pointed at before (Flick's, Leaf's), because there is only one policy per machine. `-Remove` drops only Glint's entries. UserChoice can't be written directly (hash + UCPD driver).
 - Background mode (on by default): closing the window hides it to the tray (`src/app/tray.rs`) and frees image memory. Login autostart runs `glintw.exe --background` from HKCU\...\Run. `glint quit` really exits. Toggle with `glint ctl background off`.
 
 ## Driving the viewer (for Claude)

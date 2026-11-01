@@ -21,7 +21,10 @@ Get-ChildItem 'HKCU:\Software\Classes\SystemFileAssociations' -ErrorAction Silen
 
 Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Glint' -ErrorAction SilentlyContinue
 $policy = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System' -ErrorAction SilentlyContinue).DefaultAssociationsConfiguration
-if ($policy -like '*Glint*') { & (Join-Path $PSScriptRoot 'set-default.ps1') -Remove }
+# The policy may point at Flick's or Leaf's file with Glint's entries merged in.
+if ($policy -and (Test-Path $policy) -and ((Get-Content -Raw $policy) -match 'Glint\.')) {
+    & (Join-Path $PSScriptRoot 'set-default.ps1') -Remove
+}
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 [Environment]::SetEnvironmentVariable('Path', (($userPath -split ';') | Where-Object { $_ -and $_ -ne $dest }) -join ';', 'User')
