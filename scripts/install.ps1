@@ -15,12 +15,16 @@ $dest = Join-Path $env:LOCALAPPDATA 'Programs\Glint'
 $gui = Join-Path $dest 'glintw.exe'
 $cli = Join-Path $dest 'glint.exe'
 
+# A release package keeps the binaries next to the scripts folder; a source checkout builds them into target\release.
+$packaged = Test-Path (Join-Path $repo 'glintw.exe')
+$bin = if ($packaged) { $repo } else { Join-Path $repo 'target\release' }
+
 # Every extension Glint opens. Keep in sync with decode::EXTENSIONS.
 $exts = @('png','apng','jpg','jpeg','jpe','jfif','gif','webp','bmp','dib','ico','cur','tga','dds','qoi',
           'tif','tiff','exr','hdr','pbm','pgm','ppm','pnm','pam','ff','svg','svgz','ase','aseprite',
           'avif','heic','heif','jxl','psd','psb','xcf','jp2','j2k','pcx','dng','cr2','cr3','nef','arw','orf','rw2','raf')
 
-if (-not $NoBuild) {
+if (-not $NoBuild -and -not $packaged) {
     Write-Host 'Building release...' -ForegroundColor Cyan
     Push-Location $repo
     try { cargo build --release; if ($LASTEXITCODE) { throw 'cargo build failed' } } finally { Pop-Location }
@@ -33,9 +37,15 @@ while ((Get-Process glintw -ErrorAction SilentlyContinue) -and (Get-Date) -lt $d
 Get-Process glintw -ErrorAction SilentlyContinue | Stop-Process -Force
 
 New-Item -ItemType Directory -Force $dest | Out-Null
-Copy-Item (Join-Path $repo 'target\release\glint.exe') $cli -Force
-Copy-Item (Join-Path $repo 'target\release\glintw.exe') $gui -Force
+Copy-Item (Join-Path $bin 'glint.exe') $cli -Force
+Copy-Item (Join-Path $bin 'glintw.exe') $gui -Force
 Write-Host "Installed to $dest" -ForegroundColor Green
+
+# Keep the uninstall scripts with the app, and clear the downloaded-file mark so Windows doesn't warn at every launch.
+$scriptsDest = Join-Path $dest 'scripts'
+New-Item -ItemType Directory -Force $scriptsDest | Out-Null
+Copy-Item (Join-Path $PSScriptRoot 'uninstall.ps1'), (Join-Path $PSScriptRoot 'set-default.ps1') $scriptsDest -Force
+Get-ChildItem $dest -Recurse -File | Unblock-File
 
 # PATH (user scope).
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
